@@ -1,0 +1,137 @@
+# Nombre del archivo: default.yaml
+# Configuración MODIFICADA para entrenamiento de YOLOv8 en dataset personalizado
+
+# Ultralytics YOLO 🚀, AGPL-3.0 license
+
+task: detect # (str) Tarea de YOLO, ej. detect, segment, classify, pose
+mode: train # (str) Modo de YOLO, ej. train, val, predict, export, track, benchmark
+
+# Train settings -------------------------------------------------------------------------------------------------------
+model: yolov8n.pt # (str, opcional) Ruta al archivo del modelo. Considera yolov8s.pt o yolov8m.pt si necesitas más precisión y tu GPU lo permite.
+data: PUT_YOUR_DATASET_YAML_PATH_HERE.yaml # (str, opcional) ¡¡¡DEBES CAMBIAR ESTO por la ruta a tu archivo dataset.yaml!!!
+epochs: 300 # (int) Número de épocas para entrenar.
+time: # (float, opcional) Número de horas para entrenar, anula epochs si se proporciona.
+patience: 20 # (int) ÉPOCAS DE EARLY STOPPING. Épocas a esperar sin mejora observable para detener el entrenamiento.
+batch: 32 # (int) Número de imágenes por lote. AJUSTA ESTO SEGÚN LA MEMORIA DE TU GPU (VRAM). Prueba 64 si tienes >12-16GB, 16 u 8 si tienes menos o recibes errores de memoria.
+imgsz: 640 # (int | list) Tamaño de las imágenes de entrada.
+save: True # (bool) Guardar checkpoints de entrenamiento y resultados de predicción.
+save_period: -1 # (int) Guardar checkpoint cada x épocas (deshabilitado si < 1).
+cache: disk # (bool | str) True/ram, disk o False. Usar caché para carga de datos. 'disk' es una buena opción si la E/S es un cuello de botella.
+device: 0 # (int | str | list, opcional) Dispositivo para ejecutar, ej. cuda device=0 o device=0,1,2,3 o device=cpu.
+workers: 8 # (int) Número de hilos para carga de datos. Ajusta según tu CPU; 4-8 es común.
+project: UDIT_Custom_Train # (str, opcional) Nombre del proyecto. Cambia según tu organización.
+name: yolov8n_custom_run1 # (str, opcional) Nombre del experimento, los resultados se guardan en 'project/name'.
+exist_ok: False # (bool) Sobrescribir experimento existente.
+pretrained: True # (bool | str) Usar un modelo preentrenado. ¡MUY RECOMENDADO!
+optimizer: auto # (str) Optimizador a usar, choices=[SGD, Adam, Adamax, AdamW, NAdam, RAdam, RMSProp, auto]. 'auto' suele funcionar bien.
+verbose: True # (bool) Imprimir salida detallada.
+seed: 42 # (int) Semilla aleatoria para reproducibilidad.
+deterministic: True # (bool) Habilitar modo determinístico (puede ser más lento, pero bueno para reproducibilidad).
+single_cls: False # (bool) Entrenar datos multiclase como una sola clase.
+rect: False # (bool) Entrenamiento rectangular.
+cos_lr: False # (bool) Usar planificador de tasa de aprendizaje coseno.
+close_mosaic: 10 # (int) Deshabilitar aumento de mosaico en las últimas N épocas.
+resume: False # (bool) Reanudar entrenamiento desde el último checkpoint.
+amp: True # (bool) Entrenamiento con Precisión Mixta Automática (AMP).
+fraction: 1.0 # (float) Fracción del dataset a usar para entrenar.
+profile: False # (bool) Perfilar velocidades de ONNX y TensorRT.
+freeze: None # (int | list, opcional) Congelar las primeras n capas o una lista de capas.
+multi_scale: False # (bool) Usar multiescala durante el entrenamiento.
+
+# Segmentation settings (manteniendo los originales ya que la tarea es 'detect')
+overlap_mask: True # (bool) masks should overlap during training (segment train only)
+mask_ratio: 4 # (int) mask downsample ratio (segment train only)
+
+# Classification settings (manteniendo los originales ya que la tarea es 'detect')
+dropout: 0.0 # (float) use dropout regularization (classify train only)
+
+# Val/Test settings ----------------------------------------------------------------------------------------------------
+val: True # (bool) Validar/probar durante el entrenamiento.
+split: val # (str) División del dataset para validación.
+save_json: True # (bool) Guardar resultados en archivo JSON (para métricas COCO).
+save_hybrid: False # (bool) Guardar versión híbrida de etiquetas.
+conf:  # (float, opcional) Umbral de confianza para detección (predeterminado 0.25 predict, 0.001 val).
+iou: 0.5 # (float) Umbral de IoU para NMS en validación.
+max_det: 300 # (int) Número máximo de detecciones por imagen.
+half: False # (bool) Usar media precisión (FP16) para validación.
+dnn: False # (bool) Usar OpenCV DNN para inferencia ONNX.
+plots: True # (bool) Guardar gráficas e imágenes durante entrenamiento/validación.
+
+# Predict settings -----------------------------------------------------------------------------------------------------
+source: # (str, optional) source directory for images or videos
+vid_stride: 1 # (int) video frame-rate stride
+stream_buffer: False # (bool) buffer all streaming frames (True) or return the most recent frame (False)
+visualize: False # (bool) visualize model features
+augment: False # (bool) apply image augmentation to prediction sources
+agnostic_nms: False # (bool) class-agnostic NMS
+classes: # (int | list[int], optional) filter results by class, i.e. classes=0, or classes=[0,2,3]
+retina_masks: False # (bool) use high-resolution segmentation masks
+embed: # (list[int], optional) return feature vectors/embeddings from given layers
+
+# Visualize settings ---------------------------------------------------------------------------------------------------
+show: False # (bool) show predicted images and videos if environment allows
+save_frames: False # (bool) save predicted individual video frames
+save_txt: False # (bool) save results as .txt file
+save_conf: False # (bool) save results with confidence scores
+save_crop: False # (bool) save cropped images with results
+show_labels: True # (bool) show prediction labels, i.e. 'person'
+show_conf: True # (bool) show prediction confidence, i.e. '0.99'
+show_boxes: True # (bool) show prediction boxes
+line_width: # (int, optional) line width of the bounding boxes. Scaled to image size if None.
+
+# Export settings ------------------------------------------------------------------------------------------------------
+format: torchscript # (str) format to export to, choices at https://docs.ultralytics.com/modes/export/#export-formats
+keras: False # (bool) use Keras
+optimize: False # (bool) TorchScript: optimize for mobile
+int8: False # (bool) CoreML/TF INT8 quantization
+dynamic: False # (bool) ONNX/TF/TensorRT: dynamic axes
+simplify: False # (bool) ONNX: simplify model
+opset: # (int, optional) ONNX: opset version
+workspace: 4 # (int) TensorRT: workspace size (GB)
+nms: False # (bool) CoreML: add NMS
+
+# Hyperparameters ------------------------------------------------------------------------------------------------------
+lr0: 0.01 # (float) Tasa de aprendizaje inicial (SGD=1E-2, Adam=1E-3). 'optimizer: auto' puede ajustar esto.
+lrf: 0.01 # (float) Tasa de aprendizaje final (lr0 * lrf).
+momentum: 0.937 # (float) Momento para SGD / beta1 para Adam.
+weight_decay: 0.0005 # (float) Decaimiento de peso del optimizador.
+warmup_epochs: 3.0 # (float) Épocas de calentamiento.
+warmup_momentum: 0.8 # (float) Momento inicial de calentamiento.
+warmup_bias_lr: 0.1 # (float) Tasa de aprendizaje inicial para bias en calentamiento.
+
+# Ganancias de las funciones de pérdida
+box: 7.5 # (float) Ganancia de pérdida de bounding box.
+cls: 0.5 # (float) Ganancia de pérdida de clasificación (escalada con píxeles).
+dfl: 1.5 # (float) Ganancia de pérdida de Distribution Focal Loss.
+pose: 12.0 # (float) Ganancia de pérdida de pose (solo para modelos de pose).
+kobj: 1.0 # (float) Ganancia de pérdida de objeto de keypoint (solo para modelos de pose).
+
+label_smoothing: 0.0 # (float) Suavizado de etiquetas.
+nbs: 64 # (int) Tamaño de lote nominal (para normalización de la tasa de aprendizaje, si se usa).
+
+# Parámetros de Aumento de Datos MODIFICADOS
+hsv_h: 0.015 # (float) Aumento de matiz HSV.
+hsv_s: 0.7 # (float) Aumento de saturación HSV.
+hsv_v: 0.4 # (float) Aumento de valor HSV.
+degrees: 10.0 # (float) Rotación de imagen (+/- grados).
+translate: 0.1 # (float) Traslación de imagen (+/- fracción).
+scale: 0.5 # (float) Escala de imagen (+/- ganancia).
+shear: 2.0 # (float) Cizallamiento de imagen (+/- grados).
+perspective: 0.0005 # (float) Perspectiva de imagen (+/- fracción), rango 0-0.001.
+flipud: 0.0 # (float) Volteo vertical de imagen (probabilidad).
+fliplr: 0.5 # (float) Volteo horizontal de imagen (probabilidad).
+bgr: 0.0 # (float) Probabilidad de convertir imagen a BGR.
+mosaic: 1.0 # (float) Aumento de mosaico (probabilidad). ¡Activado!
+mixup: 0.1 # (float) Aumento de mixup (probabilidad). ¡Activado con valor bajo!
+copy_paste: 0.0 # (float) Aumento de copy-paste (generalmente para segmentación).
+
+# Parámetros de aumento específicos para clasificación (manteniendo los originales)
+auto_augment: randaugment # (str) auto augmentation policy for classification (randaugment, autoaugment, augmix)
+erasing: 0.4 # (float) probability of random erasing during classification training (0-0.9), 0 means no erasing, must be less than 1.0.
+crop_fraction: 1.0 # (float) image crop fraction for classification (0.1-1), 1.0 means no crop, must be greater than 0.
+
+# Custom config.yaml ---------------------------------------------------------------------------------------------------
+cfg: # (str, optional) for overriding defaults.yaml
+
+# Tracker settings ------------------------------------------------------------------------------------------------------
+# tracker: botsort.yaml # (str) tracker type, choices=[botsort.yaml, bytetrack.yaml]

@@ -1,0 +1,15 @@
+artifact_uri: file:///C:/Users/ma2mo/Documents/Master/vision/Trabajo-final/UDIT-main/UDIT-main/runs/mlflow/342124807985113997/801438d6e5a342f9b33b9c0547ea56f4/artifacts
+end_time: 1747855375533
+entry_point_name: ''
+experiment_id: '342124807985113997'
+lifecycle_stage: active
+run_id: 801438d6e5a342f9b33b9c0547ea56f4
+run_name: train6
+run_uuid: 801438d6e5a342f9b33b9c0547ea56f4
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1747855339130
+status: 3
+tags: []
+user_id: ma2mo

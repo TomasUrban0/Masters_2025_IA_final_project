@@ -1,0 +1,688 @@
+# Nombre del archivo: split_dataset.py
+import os
+import glob
+import shutil
+import argparse
+import numpy as np
+import yaml # Necesitarás PyYAML: pip install PyYAML
+from collections import Counter
+# Asegúrate de tener scikit-multilearn instalado: pip install scikit-multilearn
+from skmultilearn.model_selection import IterativeStratification
+
+
+def load_class_names(obj_names_file_path, input_dir_for_relative_path=None):
+    path_to_check = obj_names_file_path
+    if input_dir_for_relative_path and \
+       not os.path.dirname(obj_names_file_path) and \
+       not os.path.isabs(obj_names_file_path):
+        path_to_check = os.path.join(input_dir_for_relative_path, obj_names_file_path)
+    elif not os.path.isabs(path_to_check):
+        path_to_check = os.path.abspath(path_to_check)
+    print(f"INFO: Intentando cargar nombres de clases desde: {path_to_check}")
+    if not os.path.exists(path_to_check):
+        print(f"¡ERROR CRÍTICO! Archivo de nombres de clases '{path_to_check}' no encontrado.")
+        raise FileNotFoundError(f"Archivo de clases {path_to_check} no encontrado.")
+    with open(path_to_check, 'r', encoding='utf-8') as f:
+        class_names = [line.strip() for line in f if line.strip()]
+    if not class_names:
+        print(f"¡ERROR CRÍTICO! El archivo de clases '{path_to_check}' está vacío.")
+        raise ValueError(f"El archivo de clases '{path_to_check}' está vacío.")
+    print(f"INFO: Clases cargadas ({len(class_names)}): {class_names}")
+    return class_names
+
+def get_image_label_pairs(input_dir, image_extensions=('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff')):
+    image_files = []
+    images_path = os.path.join(input_dir, 'images')
+    labels_path = os.path.join(input_dir, 'labels')
+    if not os.path.isdir(images_path):
+        print(f"¡ERROR CRÍTICO! Directorio de imágenes no encontrado: {images_path}")
+        return [], []
+    if not os.path.isdir(labels_path):
+        print(f"¡ERROR CRÍTICO! Directorio de etiquetas no encontrado: {labels_path}")
+        return [], []
+    print(f"INFO: Buscando imágenes en: {images_path}")
+    for ext in image_extensions:
+        image_files.extend(glob.glob(os.path.join(images_path, f'*{ext}')))
+        image_files.extend(glob.glob(os.path.join(images_path, f'*{ext.upper()}')))
+    image_files = sorted(list(set(image_files)))
+    valid_image_files, valid_label_files = [], []
+    if not image_files:
+        print(f"ADVERTENCIA: No se encontraron archivos de imagen en {images_path} con las extensiones {image_extensions}")
+        return [], []
+    for img_f_path in image_files:
+        base_name = os.path.splitext(os.path.basename(img_f_path))[0]
+        label_f_path = os.path.join(labels_path, f'{base_name}.txt')
+        if os.path.exists(label_f_path):
+            valid_image_files.append(img_f_path)
+            valid_label_files.append(label_f_path)
+        else:
+            print(f"ADVERTENCIA: No se encontró archivo de etiqueta para {img_f_path} (se esperaba en {label_f_path}). Se omitirá.")
+    if not valid_image_files:
+        print(f"ADVERTENCIA: No se encontraron pares válidos de imagen/etiqueta.")
+        return [], []
+    print(f"INFO: Encontrados {len(valid_image_files)} pares de imagen/etiqueta.")
+    return valid_image_files, valid_label_files
+
+def create_multilabel_matrix(label_files, class_names):
+    num_samples, num_classes = len(label_files), len(class_names)
+    Y = np.zeros((num_samples, num_classes), dtype=int)
+    for i, label_file in enumerate(label_files):
+        try:
+            with open(label_file, 'r', encoding='utf-8') as f:
+                for line_num, line in enumerate(f, 1):
+                    parts = line.strip().split()
+                    if not parts: continue
+                    try:
+                        class_idx_from_file = int(parts[0])
+                        if 0 <= class_idx_from_file < num_classes: Y[i, class_idx_from_file] = 1
+                        else: print(f"ADVERTENCIA: ID de clase {class_idx_from_file} fuera de rango en {label_file} (línea {line_num}). Se ignora.")
+                    except ValueError: print(f"ADVERTENCIA: Formato incorrecto ID clase en {label_file} (línea {line_num}): '{parts[0]}'. Se ignora.")
+        except Exception as e: print(f"ERROR: Procesando {label_file}: {e}.")
+    return Y
+
+def copy_files_to_split(original_indices, all_image_files, all_label_files, output_dir_root, split_name):
+    img_dest_path, lbl_dest_path = os.path.join(output_dir_root, 'images', split_name), os.path.join(output_dir_root, 'labels', split_name)
+    os.makedirs(img_dest_path, exist_ok=True)
+    os.makedirs(lbl_dest_path, exist_ok=True)
+    split_image_relative_paths = []
+    print(f"INFO: Copiando {len(original_indices)} archivos al split '{split_name}'...")
+    for original_idx in original_indices:
+        img_src, lbl_src = all_image_files[original_idx], all_label_files[original_idx]
+        img_basename, lbl_basename = os.path.basename(img_src), os.path.basename(lbl_src)
+        try:
+            shutil.copy2(img_src, os.path.join(img_dest_path, img_basename))
+            shutil.copy2(lbl_src, os.path.join(lbl_dest_path, lbl_basename))
+            split_image_relative_paths.append(os.path.join('images', split_name, img_basename).replace(os.sep, '/'))
+        except Exception as e: print(f"ERROR: Copiando {img_src} o {lbl_src}: {e}")
+    return split_image_relative_paths
+
+def create_yolo_aux_files(output_dir, class_names, train_image_out_paths, val_image_out_paths, test_image_out_paths):
+    with open(os.path.join(output_dir, "obj.names"), 'w', encoding='utf-8') as f:
+        for name in class_names: f.write(f"{name}\n")
+    print(f"INFO: Creado archivo obj.names en: {os.path.join(output_dir, 'obj.names')}")
+    for paths, name in [(train_image_out_paths, 'train'), (val_image_out_paths, 'val'), (test_image_out_paths, 'test')]:
+        if paths:
+            with open(os.path.join(output_dir, f'{name}.txt'), 'w', encoding='utf-8') as f:
+                for p in paths: f.write(f"./{p}\n")
+            print(f"INFO: Creado archivo {name}.txt en: {output_dir}")
+    yaml_data = {'path': '.', 'nc': len(class_names), 'names': class_names}
+    if train_image_out_paths: yaml_data['train'] = 'images/train'
+    if val_image_out_paths: yaml_data['val'] = 'images/val'
+    if test_image_out_paths: yaml_data['test'] = 'images/test'
+    yaml_data = {k:v for k,v in yaml_data.items() if v is not None}
+    with open(os.path.join(output_dir, 'dataset.yaml'), 'w', encoding='utf-8') as f:
+        yaml.dump(yaml_data, f, sort_keys=False, default_flow_style=False)
+    print(f"INFO: Creado archivo dataset.yaml en: {os.path.join(output_dir, 'dataset.yaml')}")
+
+def print_class_distribution_from_files(label_files_in_split, class_names, split_name_display):
+    print(f"\n--- Distribución de clases en {split_name_display} ---")
+    if not label_files_in_split: print(f"No hay archivos de etiquetas para '{split_name_display}'."); return
+    num_classes, class_counts, total_annotations, images_with_annotations_count = len(class_names), Counter(), 0, 0
+    for label_file_path in label_files_in_split:
+        try:
+            has_annotations_in_file = False
+            if not os.path.exists(label_file_path): print(f"ADVERTENCIA (Stats): {label_file_path} no existe."); continue
+            with open(label_file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    parts = line.strip().split(); class_idx = int(parts[0])
+                    if not parts: continue
+                    if 0 <= class_idx < num_classes: class_counts[class_names[class_idx]] += 1; total_annotations += 1; has_annotations_in_file = True
+            if has_annotations_in_file: images_with_annotations_count +=1
+        except Exception as e: print(f"ERROR: Leyendo {label_file_path} para stats: {e}")
+    print(f"Imágenes con anotaciones en {split_name_display}: {images_with_annotations_count} de {len(label_files_in_split)}.")
+    print(f"Anotaciones totales (objetos) en {split_name_display}: {total_annotations}")
+    if total_annotations > 0:
+        for name in class_names: print(f"  Clase '{name}': {class_counts[name]} ({(class_counts[name] / total_annotations) * 100:.2f}%)")
+    else: print("No se encontraron anotaciones válidas.")
+
+def main():
+    parser = argparse.ArgumentParser(description="Divide un dataset YOLO de forma estratificada.")
+    parser.add_argument('--input_dir', type=str, required=True, help="Directorio raíz (con 'images', 'labels').")
+    parser.add_argument('--output_dir', type=str, required=True, help="Directorio para dataset dividido.")
+    parser.add_argument('--obj_names_file', type=str, required=True, help="Ruta al archivo obj.names.")
+    parser.add_argument('--train_ratio', type=float, default=0.7, help="Proporción train.")
+    parser.add_argument('--val_ratio', type=float, default=0.15, help="Proporción val.")
+    parser.add_argument('--test_ratio', type=float, default=0.0, help="Proporción test (default 0.0).")
+    parser.add_argument('--random_seed', type=int, default=42, help="Semilla aleatoria (OJO: actualmente no usada por IterativeStratification).")
+    args = parser.parse_args()
+
+    if not np.isclose(args.train_ratio + args.val_ratio + args.test_ratio, 1.0): raise ValueError("Ratios deben sumar 1.0.")
+    if not (args.train_ratio > 0): raise ValueError("Train_ratio debe ser > 0.")
+    if any(r < 0 for r in [args.train_ratio, args.val_ratio, args.test_ratio]): raise ValueError("Ratios no pueden ser negativos.")
+
+    print("--- Iniciando División del Dataset ---")
+    abs_input_dir, abs_output_dir = os.path.abspath(args.input_dir), os.path.abspath(args.output_dir)
+    print(f"Entrada: {abs_input_dir}\nSalida: {abs_output_dir}\nRatios: Train={args.train_ratio}, Val={args.val_ratio}, Test={args.test_ratio}")
+
+    class_names = load_class_names(args.obj_names_file, abs_input_dir)
+    all_image_files, all_label_files = get_image_label_pairs(abs_input_dir)
+    if not all_image_files: print("¡ERROR CRÍTICO! No se encontraron imágenes/etiquetas. Saliendo."); return
+
+    Y_multilabel = create_multilabel_matrix(all_label_files, class_names)
+    valid_samples_mask = Y_multilabel.sum(axis=1) > 0
+    if np.sum(~valid_samples_mask) > 0: print(f"ADVERTENCIA: {np.sum(~valid_samples_mask)} muestras sin etiquetas válidas serán excluidas.")
+
+    X_indices_with_labels, Y_stratify = np.arange(len(all_image_files))[valid_samples_mask], Y_multilabel[valid_samples_mask]
+    if Y_stratify.shape[0] == 0: print("¡ERROR CRÍTICO! Ninguna muestra tiene etiquetas válidas para estratificación."); return
+    print(f"INFO: Muestras con etiquetas válidas para estratificación: {len(X_indices_with_labels)}")
+
+    # (Impresión de análisis previo de etiquetas omitida por brevedad, pero está en la versión anterior)
+
+    train_indices_final, val_indices_final, test_indices_final = np.array([], dtype=int), np.array([], dtype=int), np.array([], dtype=int)
+    current_X_indices, current_Y_labels = X_indices_with_labels.copy(), Y_stratify.copy()
+
+    # 1. Separar Entrenamiento
+    if args.train_ratio > 0 and len(current_X_indices) > 0:
+        if np.isclose(args.train_ratio, 1.0):
+            train_indices_final = current_X_indices
+            current_X_indices, current_Y_labels = np.array([], dtype=int), np.empty((0, Y_stratify.shape[1]), dtype=int)
+            print(f"DEBUG: Todas las {len(train_indices_final)} muestras a train (train_ratio=1.0).")
+        else:
+            try:
+                remainder_ratio = 1.0 - args.train_ratio
+                if np.isclose(remainder_ratio, 0): raise ValueError("Remainder_ratio es cero.")
+                
+                print(f"DEBUG: 1er Split. Ratios para IterativeStratification: [remainder={remainder_ratio:.4f}, train={args.train_ratio:.4f}]")
+                stratifier_train = IterativeStratification(n_splits=2, order=1, sample_distribution_per_fold=[remainder_ratio, args.train_ratio])
+                
+                fold1_rel, fold2_rel = next(stratifier_train.split(current_X_indices.reshape(-1,1), current_Y_labels))
+                print(f"DEBUG: Tamaños folds crudos 1er split: fold1 (para ratio {remainder_ratio:.2f})={len(fold1_rel)}, fold2 (para ratio {args.train_ratio:.2f})={len(fold2_rel)}")
+
+                # CORRECCIÓN: Asignar el fold más grande a train, el más pequeño al resto
+                if len(fold1_rel) > len(fold2_rel): # fold1 es el más grande
+                    indices_for_train_rel = fold1_rel
+                    indices_for_remainder_rel = fold2_rel
+                    print("DEBUG: fold1 (más grande) asignado a train, fold2 (más pequeño) a remainder.")
+                else: # fold2 es el más grande o son iguales
+                    indices_for_train_rel = fold2_rel
+                    indices_for_remainder_rel = fold1_rel
+                    print("DEBUG: fold2 (más grande o igual) asignado a train, fold1 (más pequeño o igual) a remainder.")
+
+                train_indices_final = current_X_indices[indices_for_train_rel]
+                temp_current_X_indices = current_X_indices[indices_for_remainder_rel]
+                temp_current_Y_labels = current_Y_labels[indices_for_remainder_rel]
+                
+                print(f"DEBUG: 1er Split OK. Train: {len(train_indices_final)}, Resto: {len(temp_current_X_indices)}")
+                current_X_indices, current_Y_labels = temp_current_X_indices, temp_current_Y_labels
+            except ValueError as e:
+                print(f"!!! ERROR 1er Split: {e}. Asignando todo a train. !!!")
+                train_indices_final = np.array(X_indices_with_labels, dtype=int)
+                current_X_indices, current_Y_labels = np.array([], dtype=int), np.empty((0, Y_stratify.shape[1]), dtype=int)
+
+    # 2. Separar Validación y Prueba del resto
+    if len(current_X_indices) > 0 and (args.val_ratio > 0 or args.test_ratio > 0):
+        if np.isclose(args.test_ratio, 0.0) and args.val_ratio > 0 :
+            val_indices_final = current_X_indices
+            print(f"DEBUG: Resto ({len(current_X_indices)}) a validación (test_ratio=0).")
+            current_X_indices, current_Y_labels = np.array([],dtype=int),np.empty((0,Y_stratify.shape[1]),dtype=int)
+        elif np.isclose(args.val_ratio, 0.0) and args.test_ratio > 0 :
+            test_indices_final = current_X_indices
+            print(f"DEBUG: Resto ({len(current_X_indices)}) a prueba (val_ratio=0).")
+            current_X_indices, current_Y_labels = np.array([],dtype=int),np.empty((0,Y_stratify.shape[1]),dtype=int)
+        elif args.val_ratio > 0 and args.test_ratio > 0:
+            try:
+                total_prop_for_val_test_in_original = args.val_ratio + args.test_ratio # Denominador
+                if np.isclose(total_prop_for_val_test_in_original, 0): raise ValueError("Suma val_ratio y test_ratio es cero en 2do split.")
+                val_prop_of_remainder = args.val_ratio / total_prop_for_val_test_in_original
+                test_prop_of_remainder = args.test_ratio / total_prop_for_val_test_in_original
+                
+                print(f"DEBUG: 2do Split. Ratios para IterativeStratification: [test={test_prop_of_remainder:.4f}, val={val_prop_of_remainder:.4f}]")
+                stratifier_val_test = IterativeStratification(n_splits=2, order=1, sample_distribution_per_fold=[test_prop_of_remainder, val_prop_of_remainder])
+                
+                fold1_vt_rel, fold2_vt_rel = next(stratifier_val_test.split(current_X_indices.reshape(-1,1), current_Y_labels))
+                print(f"DEBUG: Tamaños folds crudos 2do split: fold1 (para ratio test)={len(fold1_vt_rel)}, fold2 (para ratio val)={len(fold2_vt_rel)}")
+
+                # Asignar basándose en el orden de sample_distribution_per_fold
+                indices_for_test_rel = fold1_vt_rel
+                indices_for_val_rel = fold2_vt_rel
+
+                val_indices_final = current_X_indices[indices_for_val_rel]
+                test_indices_final = current_X_indices[indices_for_test_rel]
+                
+                print(f"DEBUG: 2do Split OK. Val: {len(val_indices_final)}, Test: {len(test_indices_final)}")
+                current_X_indices, current_Y_labels = np.array([],dtype=int),np.empty((0,Y_stratify.shape[1]),dtype=int)
+            except ValueError as e:
+                print(f"!!! ERROR 2do Split: {e}. Asignando resto a val o test. !!!")
+                if args.val_ratio >= args.test_ratio and len(current_X_indices) > 0 : val_indices_final = np.concatenate((val_indices_final, current_X_indices)).astype(int)
+                elif args.test_ratio > args.val_ratio and len(current_X_indices) > 0 : test_indices_final = np.concatenate((test_indices_final, current_X_indices)).astype(int)
+                elif len(current_X_indices) > 0 : val_indices_final = np.concatenate((val_indices_final, current_X_indices)).astype(int) # Default a val
+                current_X_indices = np.array([], dtype=int)
+    
+    if len(current_X_indices) > 0:
+        print(f"INFO: {len(current_X_indices)} muestras restantes finales asignadas a train.")
+        train_indices_final = np.concatenate((train_indices_final, current_X_indices)).astype(int)
+        train_indices_final = np.unique(train_indices_final)
+
+    print(f"\n--- Resumen de la División Final (Número de Muestras) ---")
+    print(f"  Entrenamiento: {len(train_indices_final)}")
+    print(f"  Validación: {len(val_indices_final)}")
+    print(f"  Prueba: {len(test_indices_final)}")
+    total_split_samples = len(train_indices_final) + len(val_indices_final) + len(test_indices_final)
+    print(f"  Total en splits: {total_split_samples} (de {len(X_indices_with_labels)} muestras válidas)")
+
+    # (Comprobaciones de duplicados y totales omitidas por brevedad, pero están en la versión anterior)
+
+    if os.path.exists(abs_output_dir): print(f"ADVERTENCIA: Directorio de salida '{abs_output_dir}' ya existe.")
+    else: os.makedirs(abs_output_dir, exist_ok=True); print(f"INFO: Creado directorio de salida: {abs_output_dir}")
+
+    train_rel_paths, val_rel_paths, test_rel_paths = [], [], []
+    if len(train_indices_final) > 0: train_rel_paths = copy_files_to_split(train_indices_final, all_image_files, all_label_files, abs_output_dir, 'train')
+    if len(val_indices_final) > 0: val_rel_paths = copy_files_to_split(val_indices_final, all_image_files, all_label_files, abs_output_dir, 'val')
+    if len(test_indices_final) > 0: test_rel_paths = copy_files_to_split(test_indices_final, all_image_files, all_label_files, abs_output_dir, 'test')
+    print("\nINFO: Copia de archivos finalizada.")
+
+    create_yolo_aux_files(abs_output_dir, class_names, train_rel_paths, val_rel_paths, test_rel_paths)
+
+    train_labels_out = [os.path.join(abs_output_dir, 'labels', 'train', os.path.basename(all_label_files[i])) for i in train_indices_final] if train_indices_final.size > 0 else []
+    val_labels_out = [os.path.join(abs_output_dir, 'labels', 'val', os.path.basename(all_label_files[i])) for i in val_indices_final] if val_indices_final.size > 0 else []
+    test_labels_out = [os.path.join(abs_output_dir, 'labels', 'test', os.path.basename(all_label_files[i])) for i in test_indices_final] if test_indices_final.size > 0 else []
+
+    print_class_distribution_from_files(train_labels_out, class_names, 'Train (Nuevo Split)')
+    print_class_distribution_from_files(val_labels_out, class_names, 'Validation (Nuevo Split)')
+    print_class_distribution_from_files(test_labels_out, class_names, 'Test (Nuevo Split)')
+    print_class_distribution_from_files([all_label_files[i] for i in X_indices_with_labels], class_names, 'Original (Solo Muestras Válidas Usadas)')
+
+    print("\n--- ¡Proceso de división completado! ---")
+    print(f"Dataset dividido guardado en: {abs_output_dir}")
+
+if __name__ == '__main__':
+    main()
+    
+# python scripts\split_dataset.py --input_dir ..\dataset_train --output_dir ..\dataset_UDIS_dividido --obj_names_file ..\dataset_train\obj.names --train_ratio 0.7 --val_ratio 0.15 --test_ratio 0.15
+
+# Nombre del archivo: train_yolo.py
+
+from argparse import ArgumentParser
+
+from ultralytics import YOLO
+
+def arguments():
+    parser = ArgumentParser(
+        description="Train YOLO model")
+    parser.add_argument("--model", type=str,
+                        help="Path to model yaml or .pt file")
+    parser.add_argument("--cfg", type=str,
+                        help="Path to the cfg definining train options)")
+    parser.add_argument("--dataset", type=str,
+                        help="Path to the root folder of the database")
+    args = parser.parse_args()
+
+    return args
+if __name__ == '__main__':
+    
+    args = arguments()
+    # Load a model
+    model = YOLO(args.model)  # build a new model from scratch
+    # Use the model
+    model.train(data = args.dataset ,cfg=args.cfg)  # train the model
+
+
+# Nombre del archivo: val_yolo.py
+
+from argparse import ArgumentParser
+from ultralytics import YOLO
+
+
+def arguments():
+    parser = ArgumentParser(
+        description="Validation of YOLO model")
+    parser.add_argument("--model", type=str,
+                        help="Path to model .pt file")
+    parser.add_argument("--cfg", type=str,
+                        help="Path to the cfg definining train options)")
+    parser.add_argument("--dataset", type=str,
+                        help="Path to the root folder of the database")
+    args = parser.parse_args()
+
+    return args
+
+
+if __name__ == '__main__':
+    
+    args = arguments()
+    # Load a model
+    model = YOLO(args.model)
+    # Use the model
+    model.val(data= args.dataset,
+              cfg=args.cfg)  # val the model
+
+
+# Nombre del archivo: visualize_dataset.py
+
+from argparse import ArgumentParser
+import fiftyone as fo
+from fiftyone import ViewField as F # Para la consulta de F("ground_truth.detections")
+import os
+import glob # Para buscar archivos
+import yaml # Para leer el dataset.yaml
+
+# Comando de ejemplo para ejecutar:
+# (Leguajes) C:\Users\ma2mo\Documents\Master\vision\Trabajo-final\UDIT-main\UDIT-main>python .\scripts\visualize_dataset.py --p ..\..\dataset_train\train\ --f yolo --s train
+
+def load_coco_dataset(dataset_dir):
+    # Carga del dataset COCO (esta función se mantiene como en tus versiones anteriores)
+    print(f"--- Iniciando carga de dataset COCO ---")
+    abs_dataset_dir = os.path.abspath(dataset_dir)
+    # Asumimos una estructura típica para COCO, ajústala si es necesario
+    data_path = os.path.join(abs_dataset_dir, "data") # Donde están las imágenes
+    labels_path = os.path.join(abs_dataset_dir, "annotations", "instances_train.json") # Ejemplo de ruta de anotaciones
+
+    print(f"Directorio absoluto del dataset (dataset_dir): {abs_dataset_dir}")
+    print(f"Ruta esperada para imágenes COCO: {data_path}")
+    print(f"¿Existe la carpeta de imágenes? {os.path.isdir(data_path)}")
+    print(f"Ruta esperada para JSON de etiquetas COCO: {labels_path}")
+    print(f"¿Existe el JSON de etiquetas? {os.path.exists(labels_path)}")
+
+    if not os.path.isdir(data_path) or not os.path.exists(labels_path):
+        print("¡ERROR! Las rutas para el dataset COCO (imágenes o JSON de etiquetas) no son válidas.")
+        return None
+
+    dataset_name = "coco_viz_dataset"
+    if fo.dataset_exists(dataset_name):
+        print(f"Eliminando dataset FiftyOne preexistente: {dataset_name}")
+        fo.delete_dataset(dataset_name)
+    
+    try:
+        coco_dataset = fo.Dataset.from_dir(
+            dataset_type=fo.types.COCODetectionDataset,
+            data_path=data_path,
+            labels_path=labels_path,
+            name=dataset_name,
+            include_id=True, 
+        )
+        coco_dataset.compute_metadata() 
+        print(f"--- Carga de dataset COCO finalizada ---")
+        print(f"Nombre del dataset en FiftyOne: {coco_dataset.name}")
+        print(f"Número de muestras importadas: {len(coco_dataset)}")
+        return coco_dataset
+    except Exception as e:
+        print(f"Ocurrió un error durante la carga del dataset COCO: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+def load_yolo_dataset(dataset_dir, split_name):
+    print(f"--- Iniciando carga MANUAL de dataset YOLO para el split '{split_name}' ---")
+    abs_dataset_dir = os.path.abspath(dataset_dir) # Directorio raíz pasado con --p
+    yaml_path = os.path.join(abs_dataset_dir, "dataset.yaml")
+    obj_names_path = os.path.join(abs_dataset_dir, "obj.names")
+
+    # 1. Leer nombres de clases de obj.names
+    class_names = []
+    if os.path.exists(obj_names_path):
+        with open(obj_names_path, 'r', encoding='utf-8') as f:
+            class_names = [line.strip() for line in f if line.strip()]
+        print(f"Clases leídas de obj.names: {class_names}")
+        if not class_names:
+            print(f"¡ERROR! obj.names en '{obj_names_path}' está vacío o no se pudo leer correctamente.")
+            return None
+    else:
+        print(f"¡ERROR! obj.names no encontrado en '{obj_names_path}'")
+        return None
+
+    # 2. Leer dataset.yaml para obtener la ruta de las imágenes para el split dado
+    images_subdir_for_split = None
+    labels_subdir_for_split = None
+
+    if os.path.exists(yaml_path):
+        with open(yaml_path, 'r', encoding='utf-8') as f_yaml:
+            try:
+                config_yaml = yaml.safe_load(f_yaml)
+                print(f"Contenido de dataset.yaml parseado: {config_yaml}")
+                
+                # 'path' en yaml es relativo a la ubicación del yaml (abs_dataset_dir)
+                base_path_from_yaml = os.path.normpath(os.path.join(abs_dataset_dir, config_yaml.get('path', '.')))
+                
+                images_rel_path_in_yaml = config_yaml.get(split_name) # ej., 'images/train'
+                if images_rel_path_in_yaml:
+                    images_subdir_for_split = os.path.normpath(os.path.join(base_path_from_yaml, images_rel_path_in_yaml))
+                    print(f"Ruta de imágenes para el split '{split_name}': {images_subdir_for_split}")
+                    if not os.path.isdir(images_subdir_for_split):
+                        print(f"¡ERROR! La carpeta de imágenes '{images_subdir_for_split}' no existe.")
+                        return None
+                    
+                    # Construir la ruta de etiquetas basada en la de imágenes
+                    # Asume que 'images' en la ruta se reemplaza por 'labels'
+                    # ej., '.../dataset_root/images/train' -> '.../dataset_root/labels/train'
+                    
+                    # Dividir la ruta en partes para buscar 'images'
+                    # Primero, obtener la parte de la ruta relativa a la base_path_from_yaml
+                    rel_img_path_for_split = os.path.relpath(images_subdir_for_split, base_path_from_yaml)
+
+                    if "images" not in rel_img_path_for_split.split(os.sep):
+                         print(f"¡ERROR! No se pudo construir la ruta de etiquetas desde '{images_subdir_for_split}'.")
+                         print(f"La ruta relativa '{rel_img_path_for_split}' (basada en 'path: {config_yaml.get('path', '.')}' en el YAML y el split '{split_name}')")
+                         print("no contiene una subcarpeta 'images' como se esperaba para inferir la carpeta 'labels'.")
+                         print("Ejemplo esperado: 'path/images/split_name' -> 'path/labels/split_name'")
+                         return None
+                    
+                    # Reemplazar la primera 'images' por 'labels' en la ruta relativa
+                    rel_lbl_path_for_split = rel_img_path_for_split.replace("images", "labels", 1)
+                    labels_subdir_for_split = os.path.normpath(os.path.join(base_path_from_yaml, rel_lbl_path_for_split))
+
+                    print(f"Ruta de etiquetas inferida para el split '{split_name}': {labels_subdir_for_split}")
+                    if not os.path.isdir(labels_subdir_for_split):
+                        print(f"¡ERROR! La carpeta de etiquetas inferida '{labels_subdir_for_split}' no existe.")
+                        return None
+                else:
+                    print(f"¡ERROR! El split '{split_name}' (ej. 'train', 'val') no está definido como clave en dataset.yaml o no tiene una ruta de imágenes asociada.")
+                    return None
+            except yaml.YAMLError as e:
+                print(f"¡ERROR! Al parsear dataset.yaml: {e}")
+                return None
+    else:
+        print(f"¡ERROR! dataset.yaml no encontrado en '{yaml_path}'")
+        return None
+    
+    # 3. Crear o cargar el dataset de FiftyOne
+    dataset_name = f"yolo_manual_load_{split_name}"
+    if fo.dataset_exists(dataset_name):
+        print(f"Eliminando dataset FiftyOne preexistente: {dataset_name}")
+        fo.delete_dataset(dataset_name)
+    dataset = fo.Dataset(name=dataset_name)
+    dataset.default_classes = class_names 
+    dataset.save() 
+
+    # 4. Recorrer imágenes y cargar etiquetas
+    filepaths_in_split = []
+    for ext in ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif"): # Añadidas más extensiones comunes
+        filepaths_in_split.extend(glob.glob(os.path.join(images_subdir_for_split, ext)))
+    
+    print(f"Encontradas {len(filepaths_in_split)} imágenes en '{images_subdir_for_split}'")
+    
+    samples_to_add = []
+    count_labels_files_found = 0
+    count_detections_loaded = 0
+
+    for image_filepath in filepaths_in_split:
+        sample = fo.Sample(filepath=image_filepath)
+        
+        filename_no_ext, _ = os.path.splitext(os.path.basename(image_filepath))
+        label_filepath = os.path.join(labels_subdir_for_split, filename_no_ext + ".txt")
+        
+        detections_for_sample = []
+        if os.path.exists(label_filepath):
+            count_labels_files_found += 1
+            with open(label_filepath, 'r', encoding='utf-8') as f_label:
+                for line_number, line_content in enumerate(f_label):
+                    parts = line_content.strip().split()
+                    if len(parts) == 5:
+                        try:
+                            class_id = int(parts[0])
+                            x_center = float(parts[1])
+                            y_center = float(parts[2])
+                            width = float(parts[3])
+                            height = float(parts[4])
+                            
+                            if not (0 <= class_id < len(class_names)):
+                                print(f"Advertencia: ID de clase {class_id} fuera de rango (0-{len(class_names)-1}) en '{label_filepath}', línea {line_number+1}. Ignorando detección.")
+                                continue
+                            
+                            if not all(0 <= val <= 1 for val in [x_center, y_center, width, height]):
+                                print(f"Advertencia: Coordenadas no normalizadas o inválidas en '{label_filepath}', línea {line_number+1}: {[x_center, y_center, width, height]}. Ignorando detección.")
+                                continue
+                            if width <= 0 or height <= 0:
+                                print(f"Advertencia: Ancho o alto no positivo en '{label_filepath}', línea {line_number+1}: w={width}, h={height}. Ignorando detección.")
+                                continue
+
+                            x_min = x_center - width / 2.0
+                            y_min = y_center - height / 2.0
+                            
+                            x_min = max(0.0, x_min)
+                            y_min = max(0.0, y_min)
+                            width = min(width, 1.0 - x_min)
+                            height = min(height, 1.0 - y_min)
+
+                            detections_for_sample.append(
+                                fo.Detection(
+                                    label=class_names[class_id], 
+                                    bounding_box=[x_min, y_min, width, height],
+                                    index=class_id 
+                                )
+                            )
+                            count_detections_loaded +=1
+                        except ValueError:
+                            print(f"Advertencia: Línea mal formateada (no se pudieron convertir números) en '{label_filepath}', línea {line_number+1}: '{line_content.strip()}'")
+        
+        if detections_for_sample:
+             sample["ground_truth"] = fo.Detections(detections=detections_for_sample)
+        samples_to_add.append(sample)
+
+    if samples_to_add:
+        dataset.add_samples(samples_to_add)
+        
+    print(f"Procesadas {len(samples_to_add)} imágenes.")
+    print(f"Se encontraron y procesaron {count_labels_files_found} archivos de etiquetas correspondientes.")
+    print(f"Se cargaron un total de {count_detections_loaded} detecciones.")
+    print(f"Número final de muestras en el dataset '{dataset.name}': {len(dataset)}")
+
+    if len(dataset) > 0:
+        first_sample_with_gt = dataset.match(F("ground_truth.detections").exists()).first()
+        if first_sample_with_gt:
+            print("\n--- Información de la primera muestra CON ETIQUETAS (cargada manualmente) ---")
+            print(f"Filepath: {first_sample_with_gt.filepath}")
+            if first_sample_with_gt.ground_truth and first_sample_with_gt.ground_truth.detections:
+                print("Detections en 'ground_truth':")
+                for i, det in enumerate(first_sample_with_gt.ground_truth.detections[:5]):
+                    print(f"  Detección {i}: Label='{det.label}', BBox={det.bounding_box}, Index (ClassID)={det.index}")
+            else:
+                print("  No hay detecciones 'ground_truth' para esta muestra.")
+        else:
+            print("No se encontraron muestras con etiquetas 'ground_truth' en el dataset.")
+        print("--------------------------------------------------------")
+
+    return dataset
+
+def arguments():
+    parser=ArgumentParser(description="Visualize UDIT NN/CV project dataset")
+    parser.add_argument("--path","--p",type=str, required=True, help="Path to the root folder of the dataset (e.g., where dataset.yaml and obj.names are, and where images/labels folders are relative to 'path' in YAML).")
+    parser.add_argument("--format","--f",type=str, choices=["yolo","coco"], required=True, help="Format of the dataset")
+    parser.add_argument("--split","--s",type=str, default="train", help="Split of the dataset (e.g., 'train', 'val', 'test'. Default: 'train')")
+    args=parser.parse_args()
+    return args
+
+if __name__ == "__main__":
+    args = arguments()
+    dataset_to_launch = None 
+
+    if args.format =="coco":
+        dataset_to_launch = load_coco_dataset(args.path)
+    elif args.format =="yolo":
+        dataset_to_launch = load_yolo_dataset(args.path, args.split)
+
+    if dataset_to_launch and len(dataset_to_launch) > 0:
+        print(f"Lanzando la aplicación FiftyOne para el dataset: {dataset_to_launch.name} con {len(dataset_to_launch)} muestras.")
+        session = fo.launch_app(dataset_to_launch, auto=False) # auto=False para que puedas copiar la URL si es necesario
+        print(f"FiftyOne App URL: {session.url}")
+        session.wait()
+    elif dataset_to_launch and len(dataset_to_launch) == 0:
+        print("El dataset se cargó pero está vacío. La aplicación FiftyOne no se lanzará. Revisa los logs y la configuración.")
+    else:
+        print("No se pudo cargar el dataset o ocurrió un error. La aplicación FiftyOne no se lanzará. Revisa los mensajes anteriores.")
+        
+# python scripts\visualize_dataset.py --p ..\dataset_UDIS_dividido --f yolo --s test
+
+# Nombre del archivo: visualize_val_predictions.py
+from argparse import ArgumentParser
+
+import fiftyone as fo
+from ultralytics import YOLO
+import fiftyone.utils.ultralytics as fou
+
+def load_yolo_dataset(dataset_dir,split):
+    dataset = fo.Dataset.from_dir(dataset_type=fo.types.YOLOv5Dataset,dataset_dir= dataset_dir,yaml_path=f"{dataset_dir}/dataset.yaml",split=split)
+    dataset.compute_metadata()
+    return dataset
+
+
+def arguments():
+    parser=ArgumentParser(description="Visualize UDIT NN/CV project database")
+    parser.add_argument("--path","--p",type=str,help="Path to the root folder of the database")
+    parser.add_argument("--weights","--w",type=str,help="Path to the model weights file(.pt)")
+    args=parser.parse_args()
+    return args
+
+if __name__ == "__main__":
+
+    args = arguments()
+
+    dataset = load_yolo_dataset(args.path,"val")
+    # Load a model
+    model = YOLO(args.weights)  # build a new model from scratch
+    
+    for sample in dataset.iter_samples(progress=True):
+        result = model.predict(sample.filepath)[0]
+        sample["predictions"] = fou.to_detections(result)
+        sample.save()             
+    session = fo.launch_app(dataset)
+    session.wait()
+
+# Nombre del archivo: yolov8.yaml
+
+# Ultralytics YOLO 🚀, AGPL-3.0 license
+# YOLOv8 object detection model with P3-P5 outputs. For Usage examples see https://docs.ultralytics.com/tasks/detect
+
+# Parameters
+nc: 11 # number of classes
+scales: # model compound scaling constants, i.e. 'model=yolov8n.yaml' will call yolov8.yaml with scale 'n'
+  # [depth, width, max_channels]
+  n: [0.33, 0.25, 1024] # YOLOv8n summary: 225 layers,  3157200 parameters,  3157184 gradients,   8.9 GFLOPs
+  s: [0.33, 0.50, 1024] # YOLOv8s summary: 225 layers, 11166560 parameters, 11166544 gradients,  28.8 GFLOPs
+  m: [0.67, 0.75, 768] # YOLOv8m summary: 295 layers, 25902640 parameters, 25902624 gradients,  79.3 GFLOPs
+  l: [1.00, 1.00, 512] # YOLOv8l summary: 365 layers, 43691520 parameters, 43691504 gradients, 165.7 GFLOPs
+  x: [1.00, 1.25, 512] # YOLOv8x summary: 365 layers, 68229648 parameters, 68229632 gradients, 258.5 GFLOPs
+
+# YOLOv8.0n backbone
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv, [64, 3, 2]] # 0-P1/2
+  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4
+  - [-1, 3, C2f, [128, True]]
+  - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
+  - [-1, 6, C2f, [256, True]]
+  - [-1, 1, Conv, [512, 3, 2]] # 5-P4/16
+  - [-1, 6, C2f, [512, True]]
+  - [-1, 1, Conv, [1024, 3, 2]] # 7-P5/32
+  - [-1, 3, C2f, [1024, True]]
+  - [-1, 1, SPPF, [1024, 5]] # 9
+
+# YOLOv8.0n head
+head:
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 6], 1, Concat, [1]] # cat backbone P4
+  - [-1, 3, C2f, [512]] # 12
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 4], 1, Concat, [1]] # cat backbone P3
+  - [-1, 3, C2f, [256]] # 15 (P3/8-small)
+
+  - [-1, 1, Conv, [256, 3, 2]]
+  - [[-1, 12], 1, Concat, [1]] # cat head P4
+  - [-1, 3, C2f, [512]] # 18 (P4/16-medium)
+
+  - [-1, 1, Conv, [512, 3, 2]]
+  - [[-1, 9], 1, Concat, [1]] # cat head P5
+  - [-1, 3, C2f, [1024]] # 21 (P5/32-large)
+
+  - [[15, 18, 21], 1, Detect, [nc]] # Detect(P3, P4, P5)
+

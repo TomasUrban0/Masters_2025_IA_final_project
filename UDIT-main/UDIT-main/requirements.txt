@@ -1,0 +1,9 @@
+fiftyone
+tensorboard
+--extra-index-url https://download.pytorch.org/whl/cu129
+torch 
+torchvision   
+torchaudio 
+ultralytics
+mlflow
+numpy
