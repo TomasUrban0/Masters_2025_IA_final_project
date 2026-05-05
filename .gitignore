@@ -23,13 +23,28 @@ ENV/
 Thumbs.db
 
 # Datasets (large, not tracked)
-UDIT-main/UDIT-main/dataset_train/
-UDIT-main/UDIT-main/dataset_UDIS_dividido/
+detection/dataset_train/
+detection/dataset_split/
+detection/dataset_UDIS_dividido/
 dataset_train/
+dataset_split/
 dataset_UDIS_dividido/
+
+# Training artifacts
+detection/runs/
+runs/
+mlruns/
+
+# Model weights (download via Ultralytics on demand)
+*.pt
+*.pth
+*.onnx
 
 # Jupyter
 .ipynb_checkpoints/
 
 # Environment
 *.env
+
+# Claude Code local settings
+.claude/
