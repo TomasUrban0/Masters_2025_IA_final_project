@@ -1,5 +1,35 @@
-*/__pycache__
-./UDIT-main/dataset_train
-./UDIT-main/dataset_UDIS_dividido
-/UDIT-main/dataset_train
-/UDIT-main/dataset_UDIS_dividido
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Datasets (large, not tracked)
+UDIT-main/UDIT-main/dataset_train/
+UDIT-main/UDIT-main/dataset_UDIS_dividido/
+dataset_train/
+dataset_UDIS_dividido/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment
+*.env

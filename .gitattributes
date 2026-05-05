@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Mark large files for GitHub display
+*.pt filter=lfs diff=lfs merge=lfs -text
+*.pdf linguist-documentation
+
+# Language statistics - show Python as primary
+*.yaml linguist-detectable=false
+*.yml linguist-detectable=false
